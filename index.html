@@ -487,30 +487,40 @@ async function processFile(file){
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
         model:'claude-sonnet-4-20250514',
-        max_tokens:1000,
-        system:`You are a contract analysis assistant. Extract structured data from software vendor contracts and return ONLY a valid JSON object with no markdown, no code fences, no explanations.
+        max_tokens:1500,
+        system:`You are an expert contract analyst. Extract structured data from software vendor contracts — including orders, quotes, amendments, SOWs, and MSAs. Return ONLY a valid JSON object. No markdown, no backticks, no explanation text whatsoever.
 
 Required JSON schema:
 {
-  "vendor": "vendor company name (string)",
-  "category": "one of: CRM | Dev Tools | Productivity | Design | Security | Infrastructure | Finance | HR | Marketing | Other",
-  "arr": annual_contract_value_usd_as_number_no_symbols,
-  "billing": "Annual | Monthly | Quarterly",
+  "vendor": "the vendor/supplier company name — e.g. Datadog, Salesforce, GitHub. NOT the customer name.",
+  "customer": "the customer/buyer company name",
+  "category": "one of exactly: CRM | Dev Tools | Productivity | Design | Security | Infrastructure | Finance | HR | Marketing | Other",
+  "arr": annual_value_as_plain_number,
+  "billing": "Monthly | Annual | Quarterly",
   "start": "YYYY-MM-DD or empty string",
   "end": "YYYY-MM-DD or empty string",
-  "seats": number_or_null,
-  "owner": "customer-side contact or signatory name or empty string",
-  "summary": "2 sentence plain English summary of what this contract covers"
+  "seats": primary_seat_or_host_count_as_number_or_null,
+  "owner": "customer-side signatory or primary contact full name, or empty string",
+  "payment_method": "Credit Card | Invoice | ACH | Wire | Other",
+  "summary": "2-3 sentence plain English summary covering what services are included, key quantities, and contract structure"
 }
 
-Rules:
-- arr must be annual value in USD as a plain number (e.g. 48000 not $48,000/yr)
-- If monthly pricing found, multiply by 12 for arr
-- If a field is not found, use null or empty string
-- Return ONLY the JSON object`,
+Critical extraction rules:
+1. VENDOR is the company selling the product (e.g. Datadog Inc., Salesforce, GitHub). Never use the customer name or filename as the vendor.
+2. ARR calculation:
+   - If billing is Monthly: multiply the monthly total by 12 for arr (e.g. $60,991.92/mo × 12 = $731,903.04)
+   - If billing is Annual: use the annual total directly
+   - If billing is Quarterly: multiply by 4
+   - Look for "Net Amount Due", "Total", "Annual Contract Value", or sum line items to find the total
+   - arr must be a plain number with no currency symbols, commas, or text (e.g. 731903.04)
+3. SEATS: use the primary unit count — for infrastructure tools use host count, for SaaS use seat/user count
+4. DATES: extract Start Date and End Date exactly as stated; format as YYYY-MM-DD
+5. OWNER: look for the customer signatory on the signature page, or the primary customer contact
+6. If any field genuinely cannot be found, use null or empty string — never guess
+7. Return ONLY the JSON object with no other text`,
         messages:[{role:'user',content:[
           {type:'document',source:{type:'base64',media_type:'application/pdf',data:b64}},
-          {type:'text',text:'Extract the contract data and return JSON only.'}
+          {type:'text',text:'Carefully read this entire contract document and extract all fields into the JSON schema. Pay special attention to: (1) identifying the vendor company vs customer company, (2) computing the correct annual value from the payment frequency and totals shown, (3) finding the exact start and end dates, and (4) identifying the customer signatory name. Return JSON only.'}
         ]}]
       })
     });
@@ -528,8 +538,8 @@ Rules:
     clearInterval(timer);
     document.getElementById('scan-overlay').classList.remove('show');
     // Fallback: show form with filename pre-filled
-    showReview({vendor:file.name.replace(/\.pdf$/i,'').replace(/[-_]/g,' '),category:'Other',arr:null,billing:'Annual',start:'',end:'',seats:null,owner:'',summary:'Unable to auto-extract — please fill in manually.'},file.name);
-    toast('AI parsing unavailable — fill fields manually','var(--amber)');
+    showReview({vendor:'',category:'Other',arr:null,billing:'Annual',start:'',end:'',seats:null,owner:'',summary:'AI extraction encountered an error — please fill in the fields manually.'},file.name);
+    toast('AI extraction failed — please fill fields manually','var(--amber)');
   }
 }
 
@@ -544,6 +554,7 @@ function showReview(data,filename){
   set('e-start',data.start);set('e-end',data.end);set('e-seats',data.seats);set('e-summary',data.summary);
   if(data.category){const s=document.getElementById('e-category');[...s.options].forEach(o=>{if(o.value===data.category)s.value=data.category;});}
   if(data.billing){const s=document.getElementById('e-billing');[...s.options].forEach(o=>{if(o.value===data.billing)s.value=data.billing;});}
+  if(data.payment_method){const s=document.getElementById('e-method');[...s.options].forEach(o=>{if(o.text.toLowerCase().includes(data.payment_method.toLowerCase().split(' ')[0]))s.value=o.value;});}
 }
 
 function resetUpload(){
